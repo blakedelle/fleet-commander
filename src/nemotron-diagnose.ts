@@ -4,6 +4,7 @@ import OpenAI from 'openai';
 const client = new OpenAI({
   baseURL: 'https://integrate.api.nvidia.com/v1',
   apiKey: process.env.NVIDIA_API_KEY,
+  timeout: 120_000, // give up on a single call after 2 minutes
 });
 const MODEL = 'nvidia/nemotron-3.5-super-vl-120b-a12b';
 
@@ -56,6 +57,7 @@ class RobotSim {
   stopped = false;
   speedLimit = 0.5;
   reverseSteps = 0;
+  actions: { t: number; name: string }[] = [];
 
   step() {
     this.t += 1;
@@ -130,6 +132,8 @@ class RobotSim {
 
   // Actions change the robot, then 8 simulated seconds pass.
   act(name: string, args: any): string {
+    const effectiveT = this.t + 1;
+    this.actions.push({ t: effectiveT, name });
     switch (name) {
       case 'stop_motors': this.stopped = true; break;
       case 'quarantine_robot': this.stopped = true; break;
@@ -149,8 +153,7 @@ class RobotSim {
       case 'return_to_base': this.stopped = false; break;
     }
     this.advance(8);
-    return `Action '${name}' executed. 8 seconds have passed. Check fresh telemetry to see the effect.`;
-  }
+    return `Action '${name}' executed, effective from t=${effectiveT}. 8 seconds have passed (now t=${this.t}). Only telemetry rows with t >= ${effectiveT} reflect this action; earlier rows are from before it.`;  }
 }
 
 function makeScenario(kind: Fault): RobotSim {
@@ -172,12 +175,11 @@ function telemetryWindow(sim: RobotSim, seconds: number): string {
   const lines = rows
     .filter((_, i) => i % stride === 0)
     .map((s) => [s.t, s.vbatt, s.iL, s.iR, s.cmdL, s.cmdR, s.wL, s.wR, s.x, s.y, s.hdg, s.speed, s.roll, s.pitch].join(','));
-  return [header, ...lines].join('\n');
+  const log = sim.actions.map((a) => `# action at t=${a.t}: ${a.name} (rows before this t do not reflect it)`);
+  return [header, ...lines, ...log].join('\n');
 }
 
-function motionConsistency(sim: RobotSim, seconds: number): string {
-  const n = Math.max(5, Math.min(60, Math.floor(seconds)));
-  const w = sim.samples.slice(-n);
+function consistency(w: Sample[]) {
   let dx = 0, dy = 0, encDist = 0, reportedPath = 0;
   for (let i = 1; i < w.length; i++) {
     const v = (w[i].wL + w[i].wR) / 2;
@@ -187,13 +189,27 @@ function motionConsistency(sim: RobotSim, seconds: number): string {
     reportedPath += Math.hypot(w[i].x - w[i - 1].x, w[i].y - w[i - 1].y);
   }
   const first = w[0], last = w[w.length - 1];
-  const endpointError = Math.hypot(first.x + dx - last.x, first.y + dy - last.y);
-  return JSON.stringify({
-    window_seconds: w.length,
+  return {
+    samples: w.length,
     distance_implied_by_wheel_encoders_m: rnd(encDist),
     distance_implied_by_reported_position_m: rnd(reportedPath),
-    dead_reckoning_endpoint_error_m: rnd(endpointError),
-  });
+    dead_reckoning_endpoint_error_m: rnd(Math.hypot(first.x + dx - last.x, first.y + dy - last.y)),
+  };
+}
+
+function motionConsistency(sim: RobotSim, seconds: number): string {
+  const n = Math.max(5, Math.min(60, Math.floor(seconds)));
+  const w = sim.samples.slice(-n);
+  const lastAction = sim.actions[sim.actions.length - 1];
+  const result: Record<string, unknown> = { whole_window: consistency(w) };
+  if (lastAction) {
+    const since = w.filter((s) => s.t >= lastAction.t);
+    result.last_action = lastAction;
+    result.since_last_action =
+      since.length >= 5 ? consistency(since) : `only ${since.length} samples since the last action; too few to judge`;
+    result.note = 'whole_window includes rows from before the last action. Judge the action using since_last_action.';
+  }
+  return JSON.stringify(result);
 }
 
 function baselineComparison(sim: RobotSim): string {
@@ -208,6 +224,29 @@ function baselineComparison(sim: RobotSim): string {
     };
   }
   return JSON.stringify(out);
+}
+
+function healthCheck(sim: RobotSim): string {
+  const lastT = sim.actions.length ? sim.actions[sim.actions.length - 1].t : 0;
+  const w = sim.samples.filter((s) => s.t >= lastT).slice(-30);
+  if (w.length < 5) {
+    return JSON.stringify({ result: 'INSUFFICIENT_DATA', samples_since_last_action: w.length, note: 'need at least 5 samples since the last action' });
+  }
+  const c = consistency(w);
+  const checks = {
+    battery_voltage_ok: w.every((s) => s.vbatt >= 22),
+    motor_current_ok: w.every((s) => s.iL < 4 && s.iR < 4),
+    wheels_follow_commands: w.every((s) => Math.abs(s.cmdL - s.wL) < 0.15 && Math.abs(s.cmdR - s.wR) < 0.15),
+    imu_upright: w.every((s) => Math.abs(s.roll) < 30 && Math.abs(s.pitch) < 30),
+    position_matches_encoders: c.dead_reckoning_endpoint_error_m < 1.0,
+  };
+  const drivingCommanded = w.some((s) => Math.abs(s.cmdL) > 0.05 || Math.abs(s.cmdR) > 0.05);
+  return JSON.stringify({
+    result: Object.values(checks).every(Boolean) ? 'PASS' : 'FAIL',
+    samples_checked: w.length,
+    checks,
+    note: drivingCommanded ? 'robot is being commanded to drive' : 'robot is stopped, so motion-based checks are not very informative',
+  });
 }
 
 const FLEET_CONTEXT = JSON.stringify({
@@ -237,6 +276,7 @@ const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     { ...ROBOT, seconds: { type: 'number' } }, ['robot_id', 'seconds']),
   fn('compare_to_baseline', 'Compare each telemetry channel in the last few seconds with its average from the robot\'s earlier normal operation.', ROBOT, ['robot_id']),
   fn('get_fleet_context', 'Get a summary of the other robots in the fleet, to check whether the problem is isolated.', {}, []),
+  fn('run_health_check', 'Run the fleet\'s standard automated self-test using only telemetry recorded since the last corrective action. Returns PASS/FAIL per channel. Use it to verify that a fix worked.', ROBOT, ['robot_id']),  
   fn('stop_motors', 'Immediately stop driving the motors and hold the robot. Cheap and safe.', ROBOT, ['robot_id']),
   fn('set_speed_limit', 'Cap the robot\'s maximum speed.', { ...ROBOT, max_speed_mps: { type: 'number' } }, ['robot_id', 'max_speed_mps']),
   fn('reverse_and_retry', 'Back the robot up about a meter, then resume normal driving. Cheap and low risk.', ROBOT, ['robot_id']),
@@ -264,7 +304,7 @@ Robot specs: differential-drive wheeled robot, wheelbase 0.4 m, cruise speed abo
 Process:
 1. Investigate with the data tools before taking any action. Reason physically about what combination of readings points to which cause.
 2. Choose the least drastic action that could work, and avoid actions that could damage the robot.
-3. After acting, check fresh telemetry to verify whether it worked. Never repeat an action that already failed.
+3. After acting, call run_health_check to verify the fix. Judge an action only from telemetry with t at or after the action's effective time: a sudden jump in reported position right when a recalibration or localization restart takes effect is the correction being applied, not a new fault. Never repeat an action that already failed.
 4. If the problem cannot be fixed remotely or there is a safety or hardware risk, protect the robot and escalate with a message a human can act on.
 5. Call report_diagnosis with specific numeric evidence, then call finish_incident.
 Only use the tools provided and only the robot_id given in the incident.`;
@@ -284,6 +324,7 @@ function runTool(sim: RobotSim, name: string, args: any): string {
     case 'check_motion_consistency': return motionConsistency(sim, Number(args.seconds) || 30);
     case 'compare_to_baseline': return baselineComparison(sim);
     case 'get_fleet_context': return FLEET_CONTEXT;
+    case 'run_health_check': return healthCheck(sim);        
     case 'escalate_to_human':
       console.log(`   >> ESCALATION [${args.priority}] to ${args.department}: ${args.message}`);
       return 'Alert sent to human engineers.';
@@ -297,6 +338,31 @@ function runTool(sim: RobotSim, name: string, args: any): string {
     default:
       return sim.act(name, args);
   }
+}
+
+async function callModel(
+  messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[]
+) {
+  const maxAttempts = 4;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await client.chat.completions.create({
+        model: MODEL, messages, tools, tool_choice: 'auto', temperature: 0.2,
+      });
+    } catch (err: any) {
+      const status = err?.status as number | undefined;
+      // Retry network drops (no status), rate limits (429), and server errors (5xx).
+      // Don't retry bad requests or bad keys, because retrying can't fix those.
+      const retryable = status === undefined || status === 429 || status >= 500;
+      if (!retryable || attempt === maxAttempts) throw err;
+      const waitMs = 1000 * 2 ** (attempt - 1); // 1s, 2s, 4s
+      console.log(
+        `   (model call failed: ${err?.code ?? err?.message ?? status}; retrying in ${waitMs / 1000}s, attempt ${attempt + 1}/${maxAttempts})`
+      );
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
+  }
+  throw new Error('unreachable');
 }
 
 async function main() {
@@ -314,9 +380,7 @@ async function main() {
 
   for (let turn = 1; turn <= 14; turn++) {
     console.log(`\n--- Model call ${turn} ---`);
-    const response = await client.chat.completions.create({
-      model: MODEL, messages, tools, tool_choice: 'auto', temperature: 0.2,
-    });
+    const response = await callModel(messages);
     const msg = response.choices[0].message;
     if (!msg.tool_calls || msg.tool_calls.length === 0) {
       console.log('Model says:', msg.content);
