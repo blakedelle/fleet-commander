@@ -4,9 +4,9 @@ import { DbConnection, tables } from './module_bindings/index.js';
 const HOST = 'ws://localhost:3000';
 const DB_NAME = 'fleet-commander';
 const TICK_MS = 1000;
-const AUTO_FAULTS = false;                    // false = faults only from the dashboard / command line
+const AUTO_FAULTS = true;                    // false = faults only from the dashboard / command line
 const FAULT_CHANCE_PER_ROBOT_PER_SEC = 0.004; // about one fleet-wide fault per minute
-const AUTO_TECHNICIAN_SECONDS = 10;          // 0 = a human must trigger repair_robot
+const AUTO_TECHNICIAN_SECONDS = 30;          // 0 = a human must trigger repair_robot
 
 // ---------------- Physics constants ----------------
 const WHEELBASE = 0.4;
