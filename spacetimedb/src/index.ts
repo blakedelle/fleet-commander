@@ -196,14 +196,22 @@ export const process_telemetry = spacetimedb.reducer(
     // --- 2. Open an incident if needed (never for a quarantined robot) ---
     let state = prev ? prev.state : 'NOMINAL';
     if (tripped.length > 0 && state !== 'QUARANTINED') {
-      let open = false;
+      let openInc: any = null;
       for (const inc of ctx.db.incident.iter()) {
         if (inc.robot_id === a.robot_id && (inc.status === 'PENDING' || inc.status === 'TRIAGING')) {
-          open = true;
+          openInc = inc;
           break;
         }
       }
-      if (!open) {
+      if (openInc) {
+        // add channels that tripped after the incident opened
+        const known = openInc.tripped_channels.split(',').filter((c: string) => c.length > 0);
+        const merged = [...known];
+        for (const c of tripped) if (!merged.includes(c)) merged.push(c);
+        if (merged.length !== known.length) {
+          ctx.db.incident.incident_id.update({ ...openInc, tripped_channels: merged.join(',') });
+        }
+      } else {
         ctx.db.incident.insert({
           incident_id: 0,
           robot_id: a.robot_id,
@@ -322,8 +330,13 @@ export const close_incident = spacetimedb.reducer(
       closed_ms: a.ts_ms,
     });
     const r = ctx.db.robot.robot_id.find(inc.robot_id);
-    if (r && status === 'RESOLVED' && r.state !== 'QUARANTINED') {
-      ctx.db.robot.robot_id.update({ ...r, state: 'NOMINAL' });
+    if (r && r.state !== 'QUARANTINED') {
+      if (status === 'RESOLVED') {
+        ctx.db.robot.robot_id.update({ ...r, state: 'NOMINAL' });
+      } else {
+        // an escalated robot needs a human: hold it out of service
+        queueCommand(ctx, inc.robot_id, inc.incident_id, 'quarantine_robot', 'auto: incident escalated', a.ts_ms);
+      }
     }
   }
 );
@@ -352,7 +365,25 @@ function queueCommand(
   let state = r.state;
   if (command === 'stop_motors' && state !== 'QUARANTINED') state = 'STOPPED';
   if (command === 'quarantine_robot') state = 'QUARANTINED';
-  if (command === 'human_repair') state = 'NOMINAL';
+  if (command === 'human_repair') {
+    state = 'NOMINAL';
+    const g = ctx.db.gate_state.robot_id.find(robot_id);
+    if (g) {
+      ctx.db.gate_state.robot_id.update({ ...g, streaks: '0,0,0,0,0,0', clean_streak: 0, tripped_now: '' });
+    }
+    // A human fixed it: close the loop on any incident that was escalated to them
+    const toResolve: any[] = [];
+    for (const inc of ctx.db.incident.iter()) {
+      if (inc.robot_id === robot_id && inc.status === 'ESCALATED') toResolve.push(inc);
+    }
+    for (const inc of toResolve) {
+      ctx.db.incident.incident_id.update({
+        ...inc,
+        status: 'RESOLVED',
+        summary: inc.summary + ' [Resolved: repaired by a technician.]',
+      });
+    }
+  }
   if (RESUME_COMMANDS.includes(command) && state === 'STOPPED') state = 'INVESTIGATING';
   if (state !== r.state) ctx.db.robot.robot_id.update({ ...r, state });
 }
