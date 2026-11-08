@@ -57,7 +57,7 @@ interface Ctx {
 
 // ---------------- Database access (reads come from the local cache) ----------------
 let conn!: DbConnection;
-const getRobot = (id: string) => [...conn.db.robot.iter()].find((r) => r.robotId === id);
+// const getRobot = (id: string) => [...conn.db.robot.iter()].find((r) => r.robotId === id);
 const getGate = (id: string) => [...conn.db.gateState.iter()].find((g) => g.robotId === id);
 const getIncident = (id: number) => [...conn.db.incident.iter()].find((i) => i.incidentId === id);
 
