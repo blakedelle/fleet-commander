@@ -11,9 +11,11 @@ import {
 } from "spacetimedb";
 
 export default __t.row({
-  logId: __t.u32().primaryKey().name("log_id"),
+  eventId: __t.u32().primaryKey().name("event_id"),
+  incidentId: __t.u32().name("incident_id"),
   robotId: __t.string().name("robot_id"),
-  timestampMs: __t.f64().name("timestamp_ms"),
-  message: __t.string(),
-  errorCode: __t.string().name("error_code"),
+  tsMs: __t.f64().name("ts_ms"),
+  kind: __t.string(),
+  title: __t.string(),
+  detail: __t.string(),
 });

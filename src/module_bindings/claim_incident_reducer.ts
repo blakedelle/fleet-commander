@@ -12,5 +12,4 @@ import {
 
 export default {
   incidentId: __t.u32(),
-  agent: __t.string(),
 };

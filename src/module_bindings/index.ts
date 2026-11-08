@@ -34,21 +34,79 @@ import {
 } from "spacetimedb";
 
 // Import all reducer arg schemas
+import AckCommandReducer from "./ack_command_reducer";
+import AckFaultReducer from "./ack_fault_reducer";
 import ClaimIncidentReducer from "./claim_incident_reducer";
+import CloseIncidentReducer from "./close_incident_reducer";
+import InjectFaultReducer from "./inject_fault_reducer";
+import IssueCommandReducer from "./issue_command_reducer";
+import LogAgentEventReducer from "./log_agent_event_reducer";
 import ProcessTelemetryReducer from "./process_telemetry_reducer";
-import ResolveIncidentReducer from "./resolve_incident_reducer";
+import RecordDiagnosisReducer from "./record_diagnosis_reducer";
+import RecordEscalationReducer from "./record_escalation_reducer";
+import RepairRobotReducer from "./repair_robot_reducer";
+import RequeueIncidentReducer from "./requeue_incident_reducer";
 
 // Import all procedure arg schemas
 
 // Import all table schema definitions
+import AgentEventRow from "./agent_event_table";
+import EscalationRow from "./escalation_table";
+import FaultRequestRow from "./fault_request_table";
+import GateStateRow from "./gate_state_table";
 import IncidentRow from "./incident_table";
 import RobotRow from "./robot_table";
-import TelemetryLogRow from "./telemetry_log_table";
+import RobotCommandRow from "./robot_command_table";
+import TelemetrySampleRow from "./telemetry_sample_table";
 
 /** Type-only namespace exports for generated type groups. */
 
 /** The schema information for all tables in this module. This is defined the same was as the tables would have been defined in the server. */
 const tablesSchema = __schema({
+  agentEvent: __table({
+    name: 'agent_event',
+    indexes: [
+      { accessor: 'event_id', name: 'agent_event_event_id_idx_btree', algorithm: 'btree', columns: [
+        'eventId',
+      ] },
+    ],
+    constraints: [
+      { name: 'agent_event_event_id_key', constraint: 'unique', columns: ['eventId'] },
+    ],
+  }, AgentEventRow),
+  escalation: __table({
+    name: 'escalation',
+    indexes: [
+      { accessor: 'escalation_id', name: 'escalation_escalation_id_idx_btree', algorithm: 'btree', columns: [
+        'escalationId',
+      ] },
+    ],
+    constraints: [
+      { name: 'escalation_escalation_id_key', constraint: 'unique', columns: ['escalationId'] },
+    ],
+  }, EscalationRow),
+  faultRequest: __table({
+    name: 'fault_request',
+    indexes: [
+      { accessor: 'request_id', name: 'fault_request_request_id_idx_btree', algorithm: 'btree', columns: [
+        'requestId',
+      ] },
+    ],
+    constraints: [
+      { name: 'fault_request_request_id_key', constraint: 'unique', columns: ['requestId'] },
+    ],
+  }, FaultRequestRow),
+  gateState: __table({
+    name: 'gate_state',
+    indexes: [
+      { accessor: 'robot_id', name: 'gate_state_robot_id_idx_btree', algorithm: 'btree', columns: [
+        'robotId',
+      ] },
+    ],
+    constraints: [
+      { name: 'gate_state_robot_id_key', constraint: 'unique', columns: ['robotId'] },
+    ],
+  }, GateStateRow),
   incident: __table({
     name: 'incident',
     indexes: [
@@ -71,24 +129,44 @@ const tablesSchema = __schema({
       { name: 'robot_robot_id_key', constraint: 'unique', columns: ['robotId'] },
     ],
   }, RobotRow),
-  telemetryLog: __table({
-    name: 'telemetry_log',
+  robotCommand: __table({
+    name: 'robot_command',
     indexes: [
-      { accessor: 'log_id', name: 'telemetry_log_log_id_idx_btree', algorithm: 'btree', columns: [
-        'logId',
+      { accessor: 'command_id', name: 'robot_command_command_id_idx_btree', algorithm: 'btree', columns: [
+        'commandId',
       ] },
     ],
     constraints: [
-      { name: 'telemetry_log_log_id_key', constraint: 'unique', columns: ['logId'] },
+      { name: 'robot_command_command_id_key', constraint: 'unique', columns: ['commandId'] },
     ],
-  }, TelemetryLogRow),
+  }, RobotCommandRow),
+  telemetrySample: __table({
+    name: 'telemetry_sample',
+    indexes: [
+      { accessor: 'sample_id', name: 'telemetry_sample_sample_id_idx_btree', algorithm: 'btree', columns: [
+        'sampleId',
+      ] },
+    ],
+    constraints: [
+      { name: 'telemetry_sample_sample_id_key', constraint: 'unique', columns: ['sampleId'] },
+    ],
+  }, TelemetrySampleRow),
 });
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
+  __reducerSchema("ack_command", AckCommandReducer),
+  __reducerSchema("ack_fault", AckFaultReducer),
   __reducerSchema("claim_incident", ClaimIncidentReducer),
+  __reducerSchema("close_incident", CloseIncidentReducer),
+  __reducerSchema("inject_fault", InjectFaultReducer),
+  __reducerSchema("issue_command", IssueCommandReducer),
+  __reducerSchema("log_agent_event", LogAgentEventReducer),
   __reducerSchema("process_telemetry", ProcessTelemetryReducer),
-  __reducerSchema("resolve_incident", ResolveIncidentReducer),
+  __reducerSchema("record_diagnosis", RecordDiagnosisReducer),
+  __reducerSchema("record_escalation", RecordEscalationReducer),
+  __reducerSchema("repair_robot", RepairRobotReducer),
+  __reducerSchema("requeue_incident", RequeueIncidentReducer),
 );
 
 /** The schema information for all procedures in this module. This is defined the same way as the procedures would have been defined in the server. */
@@ -97,8 +175,16 @@ const proceduresSchema = __procedures(
 
 type __SchemaWithTableAccessorAliases = Omit<typeof tablesSchema.schemaType, "tables"> & {
   tables: typeof tablesSchema.schemaType.tables & {
-    /** @deprecated Use `telemetryLog` instead. This alias will be removed in the next major version. */
-    readonly "telemetry_log": Omit<typeof tablesSchema.schemaType.tables["telemetryLog"], "accessorName"> & { readonly accessorName: "telemetry_log" };
+    /** @deprecated Use `agentEvent` instead. This alias will be removed in the next major version. */
+    readonly "agent_event": Omit<typeof tablesSchema.schemaType.tables["agentEvent"], "accessorName"> & { readonly accessorName: "agent_event" };
+    /** @deprecated Use `faultRequest` instead. This alias will be removed in the next major version. */
+    readonly "fault_request": Omit<typeof tablesSchema.schemaType.tables["faultRequest"], "accessorName"> & { readonly accessorName: "fault_request" };
+    /** @deprecated Use `gateState` instead. This alias will be removed in the next major version. */
+    readonly "gate_state": Omit<typeof tablesSchema.schemaType.tables["gateState"], "accessorName"> & { readonly accessorName: "gate_state" };
+    /** @deprecated Use `robotCommand` instead. This alias will be removed in the next major version. */
+    readonly "robot_command": Omit<typeof tablesSchema.schemaType.tables["robotCommand"], "accessorName"> & { readonly accessorName: "robot_command" };
+    /** @deprecated Use `telemetrySample` instead. This alias will be removed in the next major version. */
+    readonly "telemetry_sample": Omit<typeof tablesSchema.schemaType.tables["telemetrySample"], "accessorName"> & { readonly accessorName: "telemetry_sample" };
   };
 };
 
@@ -117,7 +203,11 @@ const REMOTE_MODULE = {
 >;
 
 const tableAccessorAliases = {
-  "telemetry_log": "telemetryLog",
+  "agent_event": "agentEvent",
+  "fault_request": "faultRequest",
+  "gate_state": "gateState",
+  "robot_command": "robotCommand",
+  "telemetry_sample": "telemetrySample",
 } as const;
 
 function __withTableAccessorAliases<T extends object>(target: T, freeze = false): T {
@@ -138,14 +228,30 @@ function __withTableAccessorAliases<T extends object>(target: T, freeze = false)
 
 type __DbViewBase = __DbConnectionImpl<typeof REMOTE_MODULE>["db"];
 export type DbView = __DbViewBase & {
-  /** @deprecated Use `telemetryLog` instead. This alias will be removed in the next major version. */
-  readonly "telemetry_log": __DbViewBase["telemetryLog"];
+  /** @deprecated Use `agentEvent` instead. This alias will be removed in the next major version. */
+  readonly "agent_event": __DbViewBase["agentEvent"];
+  /** @deprecated Use `faultRequest` instead. This alias will be removed in the next major version. */
+  readonly "fault_request": __DbViewBase["faultRequest"];
+  /** @deprecated Use `gateState` instead. This alias will be removed in the next major version. */
+  readonly "gate_state": __DbViewBase["gateState"];
+  /** @deprecated Use `robotCommand` instead. This alias will be removed in the next major version. */
+  readonly "robot_command": __DbViewBase["robotCommand"];
+  /** @deprecated Use `telemetrySample` instead. This alias will be removed in the next major version. */
+  readonly "telemetry_sample": __DbViewBase["telemetrySample"];
 };
 
 type __TablesBase = __QueryBuilder<typeof tablesSchema.schemaType>;
 export type Tables = __TablesBase & {
-  /** @deprecated Use `telemetryLog` instead. This alias will be removed in the next major version. */
-  readonly "telemetry_log": __TablesBase["telemetryLog"];
+  /** @deprecated Use `agentEvent` instead. This alias will be removed in the next major version. */
+  readonly "agent_event": __TablesBase["agentEvent"];
+  /** @deprecated Use `faultRequest` instead. This alias will be removed in the next major version. */
+  readonly "fault_request": __TablesBase["faultRequest"];
+  /** @deprecated Use `gateState` instead. This alias will be removed in the next major version. */
+  readonly "gate_state": __TablesBase["gateState"];
+  /** @deprecated Use `robotCommand` instead. This alias will be removed in the next major version. */
+  readonly "robot_command": __TablesBase["robotCommand"];
+  /** @deprecated Use `telemetrySample` instead. This alias will be removed in the next major version. */
+  readonly "telemetry_sample": __TablesBase["telemetrySample"];
 };
 
 /** The tables available in this remote SpacetimeDB module. Each table reference doubles as a query builder. */

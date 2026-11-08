@@ -6,11 +6,29 @@
 import { type Infer as __Infer } from "spacetimedb";
 
 // Import all reducer arg schemas
+import AckCommandReducer from "../ack_command_reducer";
+import AckFaultReducer from "../ack_fault_reducer";
 import ClaimIncidentReducer from "../claim_incident_reducer";
+import CloseIncidentReducer from "../close_incident_reducer";
+import InjectFaultReducer from "../inject_fault_reducer";
+import IssueCommandReducer from "../issue_command_reducer";
+import LogAgentEventReducer from "../log_agent_event_reducer";
 import ProcessTelemetryReducer from "../process_telemetry_reducer";
-import ResolveIncidentReducer from "../resolve_incident_reducer";
+import RecordDiagnosisReducer from "../record_diagnosis_reducer";
+import RecordEscalationReducer from "../record_escalation_reducer";
+import RepairRobotReducer from "../repair_robot_reducer";
+import RequeueIncidentReducer from "../requeue_incident_reducer";
 
+export type AckCommandParams = __Infer<typeof AckCommandReducer>;
+export type AckFaultParams = __Infer<typeof AckFaultReducer>;
 export type ClaimIncidentParams = __Infer<typeof ClaimIncidentReducer>;
+export type CloseIncidentParams = __Infer<typeof CloseIncidentReducer>;
+export type InjectFaultParams = __Infer<typeof InjectFaultReducer>;
+export type IssueCommandParams = __Infer<typeof IssueCommandReducer>;
+export type LogAgentEventParams = __Infer<typeof LogAgentEventReducer>;
 export type ProcessTelemetryParams = __Infer<typeof ProcessTelemetryReducer>;
-export type ResolveIncidentParams = __Infer<typeof ResolveIncidentReducer>;
+export type RecordDiagnosisParams = __Infer<typeof RecordDiagnosisReducer>;
+export type RecordEscalationParams = __Infer<typeof RecordEscalationReducer>;
+export type RepairRobotParams = __Infer<typeof RepairRobotReducer>;
+export type RequeueIncidentParams = __Infer<typeof RequeueIncidentReducer>;
 

@@ -14,6 +14,11 @@ export default __t.row({
   incidentId: __t.u32().primaryKey().name("incident_id"),
   robotId: __t.string().name("robot_id"),
   status: __t.string(),
-  assignedAgent: __t.string().name("assigned_agent"),
+  trippedChannels: __t.string().name("tripped_channels"),
   createdMs: __t.f64().name("created_ms"),
+  closedMs: __t.f64().name("closed_ms"),
+  diagnosis: __t.string(),
+  confidence: __t.f64(),
+  outcome: __t.string(),
+  summary: __t.string(),
 });
