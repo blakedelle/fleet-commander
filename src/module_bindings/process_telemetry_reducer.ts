@@ -8,6 +8,15 @@ import {
   t as __t,
   type AlgebraicTypeType as __AlgebraicTypeType,
   type Infer as __Infer,
-} from 'spacetimedb';
+} from "spacetimedb";
 
-export default {};
+export default {
+  robotId: __t.string(),
+  status: __t.string(),
+  battery: __t.f64(),
+  locationX: __t.f64(),
+  locationY: __t.f64(),
+  timestampMs: __t.f64(),
+  message: __t.string(),
+  errorCode: __t.string(),
+};

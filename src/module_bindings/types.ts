@@ -8,9 +8,32 @@ import {
   t as __t,
   type AlgebraicTypeType as __AlgebraicTypeType,
   type Infer as __Infer,
-} from 'spacetimedb';
+} from "spacetimedb";
 
-export const Person = __t.object('Person', {
-  name: __t.string(),
+export const Incident = __t.object("Incident", {
+  incidentId: __t.u32(),
+  robotId: __t.string(),
+  status: __t.string(),
+  assignedAgent: __t.string(),
+  createdMs: __t.f64(),
 });
-export type Person = __Infer<typeof Person>;
+export type Incident = __Infer<typeof Incident>;
+
+export const Robot = __t.object("Robot", {
+  robotId: __t.string(),
+  status: __t.string(),
+  battery: __t.f64(),
+  locationX: __t.f64(),
+  locationY: __t.f64(),
+});
+export type Robot = __Infer<typeof Robot>;
+
+export const TelemetryLog = __t.object("TelemetryLog", {
+  logId: __t.u32(),
+  robotId: __t.string(),
+  timestampMs: __t.f64(),
+  message: __t.string(),
+  errorCode: __t.string(),
+});
+export type TelemetryLog = __Infer<typeof TelemetryLog>;
+
