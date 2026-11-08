@@ -11,23 +11,28 @@ import type {
 } from "../types";
 
 // ---------------------------------------------------------------------------
-// MOCK DATA: fake robots + two scripted stories.
-//   Story 1: robot-2 motor stall  (starts ~10 s after page load, gets fixed)
-//   Story 2: robot-4 flippedped over (starts ~50 s after page load, escalated)
+// MOCK DATA: fake robots + scripted stories.
+//   Auto story 1: robot-2 motor stall   (starts ~10 s after page load, gets fixed)
+//   Auto story 2: robot-4 flipped over  (starts ~50 s after page load, escalated)
+//   Buttons can also start: stall, drift (fixed), flipped (escalated).
 // The `detail` JSON shapes below are MY ASSUMPTIONS (see "Contract change
 // requests"). Replace them with the real shapes when the backend owner sends them.
 // ---------------------------------------------------------------------------
 
-export type MockFault = "stall" | "flipped";
+export type MockFault = "stall" | "drift" | "flipped";
 
 const ROBOT_IDS = ["robot-1", "robot-2", "robot-3", "robot-4"];
 const MAX_SAMPLES = 120; // per robot
 const CRUISE = 0.5; // m/s
 
-// Fault buttons (Milestone 6) will call this in mock mode.
+// The fault buttons call these in mock mode (see data/actions.ts).
 const pendingFaults: { robotId: string; fault: MockFault }[] = [];
+const pendingRepairs: string[] = [];
 export function injectMockFault(robotId: string, fault: MockFault) {
   pendingFaults.push({ robotId, fault });
+}
+export function injectMockRepair(robotId: string) {
+  pendingRepairs.push(robotId);
 }
 
 interface SimRobot {
@@ -121,6 +126,11 @@ function physics(w: World, now: number) {
         r.x = Math.min(20, Math.max(0, r.x + (dx / dist) * CRUISE));
         r.y = Math.min(20, Math.max(0, r.y + (dy / dist) * CRUISE));
       }
+    }
+    if (s.fault === "drift") {
+      // sensors look normal, but the REPORTED position slowly slides away
+      r.x = Math.min(20, Math.max(0, r.x + 0.12));
+      r.y = Math.min(20, Math.max(0, r.y - 0.08));
     }
     r.speed = moving ? CRUISE : 0;
 
@@ -336,9 +346,85 @@ function scheduleFlip(w: World, s: SimRobot, t0: number) {
       { outcome: "escalated", summary: inc.summary }, t);
   });
   // Demo convenience: a human "rights" the robot so you can run the story again.
+  // (Pressing Repair does the same thing earlier.)
   at(60, () => {
-    s.fault = null;
+    if (s.fault === "flipped") {
+      s.fault = null;
+      s.robot.state = "NOMINAL";
+    }
+  });
+}
+
+// ---------------------------------------------------------------- story 3
+function scheduleDrift(w: World, s: SimRobot, t0: number) {
+  const id = s.robot.robotId;
+  const at = makeAt(w, t0);
+  let inc!: Incident;
+
+  at(3, (t) => {
+    inc = openIncident(w, id, "x,y,heading_deg", t);
+    s.robot.state = "INVESTIGATING";
+  });
+  at(4, (t) => {
+    inc.status = "TRIAGING";
+    addEvent(w, inc, "tool_call", "Fetching last 30 s of telemetry",
+      { tool: "get_telemetry_window", args: { robot_id: id, seconds: 30 } }, t);
+  });
+  at(6, (t) =>
+    addEvent(w, inc, "tool_result", "Motors, wheels and IMU look normal",
+      { tool: "get_telemetry_window",
+        result: { i_left_a: 1.7, i_right_a: 1.6, w_left_ms: 0.5, w_right_ms: 0.49,
+                  roll_deg: 0.8, note: "No electrical or mechanical anomaly" } }, t));
+  at(8, (t) =>
+    addEvent(w, inc, "tool_call", "Checking motion consistency",
+      { tool: "check_motion_consistency", args: { robot_id: id } }, t));
+  at(10, (t) =>
+    addEvent(w, inc, "tool_result", "Reported position disagrees with wheel encoders",
+      { tool: "check_motion_consistency",
+        result: { mismatch_m: 1.8, consistent: false, note: "Position diverging from dead-reckoning" } }, t));
+  at(12, (t) =>
+    addEvent(w, inc, "tool_call", "Comparing against healthy baseline",
+      { tool: "compare_to_baseline", args: { robot_id: id } }, t));
+  at(14, (t) =>
+    addEvent(w, inc, "tool_result", "Only position is outside baseline",
+      { tool: "compare_to_baseline",
+        result: { i_left_a: { now: 1.7, baseline: 1.7 }, w_left_ms: { now: 0.5, baseline: 0.5 },
+                  roll_deg: { now: 0.8, baseline: 1.1 } } }, t));
+  at(16, (t) => {
+    inc.diagnosis = "Odometry drift (localization error)";
+    inc.confidence = 0.89;
+    addEvent(w, inc, "diagnosis", "Diagnosis: odometry drift",
+      { root_cause: "Odometry drift (localization error)",
+        confidence: 0.89,
+        evidence: [
+          "Position mismatch vs wheel encoders 1.8 m (normal: under 0.1 m)",
+          "Wheel velocities 0.50 m/s match the 0.50 m/s command",
+          "Motor currents 1.7 A and 1.6 A: normal",
+          "IMU roll 0.8°, pitch 0.6°: upright and stable",
+          "Mismatch is growing steadily, not a sudden jump",
+        ] }, t);
+  });
+  at(18, (t) =>
+    addEvent(w, inc, "action", "Action: recalibrate odometry",
+      { action: "recalibrate_odometry", args: { robot_id: id },
+        reason: "Sensors are healthy, so recalibrate odometry. Rebooting localization is the fallback." }, t));
+  at(21, (t) => {
+    s.fault = null; // drift stops here
+    addEvent(w, inc, "tool_call", "Verifying with fresh telemetry",
+      { tool: "check_motion_consistency", args: { robot_id: id } }, t);
+  });
+  at(23, (t) =>
+    addEvent(w, inc, "tool_result", "Position matches wheel encoders again",
+      { tool: "check_motion_consistency",
+        result: { mismatch_m: 0.03, consistent: true, verdict: "recovered" } }, t));
+  at(25, (t) => {
+    inc.status = "RESOLVED";
+    inc.closedMs = t;
+    inc.outcome = "resolved";
+    inc.summary = "Odometry drift cleared by recalibrate_odometry; position verified consistent.";
     s.robot.state = "NOMINAL";
+    addEvent(w, inc, "outcome", "Incident resolved",
+      { outcome: "resolved", summary: inc.summary }, t);
   });
 }
 
@@ -347,6 +433,7 @@ function startFault(w: World, robotId: string, fault: MockFault, t: number) {
   if (!s || s.fault || s.robot.state !== "NOMINAL") return; // robot is busy
   s.fault = fault;
   if (fault === "stall") scheduleStall(w, s, t);
+  else if (fault === "drift") scheduleDrift(w, s, t);
   else scheduleFlip(w, s, t);
 }
 
@@ -375,7 +462,7 @@ function createWorld(now: number): World {
   // 60 s of healthy history so charts are not empty later
   for (let i = 60; i > 0; i--) physics(w, now - i * 1000);
 
-  // The two scripted stories
+  // The two automatic stories
   w.steps.push({ atMs: now + 10_000, run: (t) => startFault(w, "robot-2", "stall", t) });
   w.steps.push({ atMs: now + 50_000, run: (t) => startFault(w, "robot-4", "flipped", t) });
   return w;
@@ -385,6 +472,14 @@ function tick(w: World, now: number) {
   while (pendingFaults.length) {
     const p = pendingFaults.shift()!;
     startFault(w, p.robotId, p.fault, now);
+  }
+  while (pendingRepairs.length) {
+    const id = pendingRepairs.shift()!;
+    const s = w.robots.find((x) => x.robot.robotId === id);
+    if (s && (s.robot.state === "QUARANTINED" || s.robot.state === "STOPPED")) {
+      s.fault = null;
+      s.robot.state = "NOMINAL";
+    }
   }
   const due = w.steps.filter((s) => s.atMs <= now).sort((a, b) => a.atMs - b.atMs);
   w.steps = w.steps.filter((s) => s.atMs > now);
