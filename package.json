@@ -12,6 +12,8 @@
     "spacetime:publish": "spacetime publish --module-path spacetimedb --server maincloud"
   },
   "dependencies": {
+    "dotenv": "^18.0.9",
+    "openai": "^7.53.0",
     "spacetimedb": "2.14.*"
   },
   "devDependencies": {
