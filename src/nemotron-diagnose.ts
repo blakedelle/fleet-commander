@@ -189,11 +189,29 @@ function consistency(w: Sample[]) {
     reportedPath += Math.hypot(w[i].x - w[i - 1].x, w[i].y - w[i - 1].y);
   }
   const first = w[0], last = w[w.length - 1];
+  let encYaw = 0;
+  for (let i = 1; i < w.length; i++) encYaw += ((w[i].wR - w[i].wL) / WHEELBASE) * (180 / Math.PI);
+  const reportedYaw = last.hdg - first.hdg;
+
+  // How far the reported position has strayed from dead reckoning, sample by sample
+  let rx = 0, ry = 0, firstBad: number | null = null;
+  let residualAtEnd = 0;
+  for (let i = 1; i < w.length; i++) {
+    const v = (w[i].wL + w[i].wR) / 2;
+    const h = (w[i].hdg * Math.PI) / 180;
+    rx += v * Math.cos(h); ry += v * Math.sin(h);
+    residualAtEnd = Math.hypot(w[i].x - w[0].x - rx, w[i].y - w[0].y - ry);
+    if (firstBad === null && residualAtEnd > 0.5) firstBad = w[i].t;
+  }
   return {
     samples: w.length,
     distance_implied_by_wheel_encoders_m: rnd(encDist),
     distance_implied_by_reported_position_m: rnd(reportedPath),
     dead_reckoning_endpoint_error_m: rnd(Math.hypot(first.x + dx - last.x, first.y + dy - last.y)),
+    heading_change_implied_by_encoders_deg: rnd(encYaw, 1),
+    reported_heading_change_deg: rnd(reportedYaw, 1),
+    position_residual_first_exceeds_0_5m_at_t: firstBad,
+    position_residual_at_window_end_m: rnd(residualAtEnd),
   };
 }
 
@@ -218,10 +236,13 @@ function baselineComparison(sim: RobotSim): string {
   const keys: (keyof Sample)[] = ['vbatt', 'iL', 'iR', 'cmdL', 'cmdR', 'wL', 'wR', 'speed', 'roll', 'pitch'];
   const out: Record<string, { baseline_mean: number; recent_mean: number }> = {};
   for (const k of keys) {
+    const b = mean(base.map((s) => s[k] as number));
+    const r = mean(recent.map((s) => s[k] as number));
     out[k] = {
-      baseline_mean: rnd(mean(base.map((s) => s[k] as number))),
-      recent_mean: rnd(mean(recent.map((s) => s[k] as number))),
-    };
+      baseline_mean: rnd(b),
+      recent_mean: rnd(r),
+      change_pct: Math.abs(b) > 0.05 ? rnd(((r - b) / Math.abs(b)) * 100, 0) : null,
+    } as any;
   }
   return JSON.stringify(out);
 }
@@ -300,6 +321,7 @@ const SYSTEM_PROMPT = `You are an autonomous RoboOps engineer for a warehouse ro
 You do not talk to a user. An automated anomaly gate flagged a robot; you must diagnose the cause from raw sensor data and fix it or escalate.
 
 Robot specs: differential-drive wheeled robot, wheelbase 0.4 m, cruise speed about 0.5 m/s. Normal battery voltage is 22 to 25.2 V. Normal motor current while cruising is about 1 to 2.5 A. The IMU roll and pitch are normally within about 5 degrees. Failures can be mechanical, electrical, sensor, software, or environmental, and may be ones you have not seen before.
+Physics notes: motor current rises with mechanical load. A wheel spinning at its commanded speed while drawing unusually LOW current is spinning unloaded (no traction or contact). IMU roll and pitch describe the physical orientation of the chassis, so consider what physical state the robot is in before concluding that a sensor is faulty. Prefer the single explanation that accounts for ALL anomalous channels over several independent sensor faults.
 
 Process:
 1. Investigate with the data tools before taking any action. Reason physically about what combination of readings points to which cause.
@@ -307,7 +329,11 @@ Process:
 3. After acting, call run_health_check to verify the fix. Judge an action only from telemetry with t at or after the action's effective time: a sudden jump in reported position right when a recalibration or localization restart takes effect is the correction being applied, not a new fault. Never repeat an action that already failed.
 4. If the problem cannot be fixed remotely or there is a safety or hardware risk, protect the robot and escalate with a message a human can act on.
 5. Call report_diagnosis with specific numeric evidence, then call finish_incident.
-Only use the tools provided and only the robot_id given in the incident.`;
+Only use the tools provided and only the robot_id given in the incident.
+Cite as evidence only measurements that appear in tool outputs. Do not claim something is physically impossible or abnormal unless a tool result shows it; otherwise mark it as a hypothesis. Lower your confidence when part of your explanation is interpretation rather than measurement.
+Before acting, state at least two competing explanations and name the measurement that tells them apart. Physical hypotheses are allowed as long as you label them as hypotheses and point to the readings that support them.
+After a fix works, check your root cause against it: the cause you report must explain why that specific fix worked. If it doesn't, revise the diagnosis before reporting. Do not describe environmental details (surfaces, obstacles) that no sensor reports; if you suspect one, label it clearly as a hypothesis and lower your confidence.
+Safety first: if readings suggest the robot may be in an unsafe physical state, call stop_motors BEFORE trying any software fix.`;
 
 const TRIPPED: Record<string, string> = {
   stall: 'wheel_velocity_error, motor_current',
@@ -328,10 +354,23 @@ function runTool(sim: RobotSim, name: string, args: any): string {
     case 'escalate_to_human':
       console.log(`   >> ESCALATION [${args.priority}] to ${args.department}: ${args.message}`);
       return 'Alert sent to human engineers.';
-    case 'report_diagnosis':
+    case 'report_diagnosis': {
+      let ev: unknown = args.evidence;
+      if (typeof ev === 'string') {
+        try { ev = JSON.parse(ev); }
+        catch {
+          try { ev = (JSON.parse(`[${ev}]`) as string[][]).flat(); }
+          catch { ev = [ev]; }
+        }
+      }
+      if (!Array.isArray(ev) || ev.length === 0 || ev.some((e) => typeof e !== 'string')) {
+        return 'Error: evidence must be an array of strings, one measurement or observation per item. Call report_diagnosis again.';
+      }
+      args.evidence = ev;
       console.log(`   >> DIAGNOSIS (${args.confidence}): ${args.root_cause}`);
-      console.log(`      Evidence: ${JSON.stringify(args.evidence)}`);
+      console.log(`      Evidence: ${JSON.stringify(ev)}`);
       return 'Diagnosis recorded.';
+    }
     case 'finish_incident':
       console.log(`   >> OUTCOME: ${args.outcome}. ${args.summary}`);
       return 'Incident closed.';
@@ -388,7 +427,8 @@ async function main() {
     }
     messages.push({ role: 'assistant', content: msg.content ?? '', tool_calls: msg.tool_calls });
 
-    let finished = false;
+    // let finished = false;
+    let finishCalled = false, hadError = false;
     for (const call of msg.tool_calls) {
       if (call.type !== 'function') continue;
       let args: any = {};
@@ -396,9 +436,10 @@ async function main() {
       console.log(`Tool call: ${call.function.name}`, JSON.stringify(args));
       const result = runTool(sim, call.function.name, args);
       messages.push({ role: 'tool', tool_call_id: call.id, content: result });
-      if (call.function.name === 'finish_incident') finished = true;
+      if (call.function.name === 'finish_incident') finishCalled = true;
+      if (result.startsWith('Error')) hadError = true;
     }
-    if (finished) break;
+    if (finishCalled && !hadError) break;
   }
 
   console.log('\n=== GROUND TRUTH (the model never saw this) ===');
@@ -406,4 +447,4 @@ async function main() {
   console.log(`Fault still active at the end? ${sim.fault !== 'none'}`);
 }
 
-main().catch(console.error);
+main().catch((e) => console.error('Run aborted:', e?.cause?.cause?.code ?? e?.cause?.code ?? e?.message ?? e));
